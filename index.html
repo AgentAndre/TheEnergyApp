@@ -1,0 +1,2162 @@
+    function calculateSelfConsumption(annualProduction, hourlyProfile, batteryCapacity = 0) {
+      // Vereinfachte Berechnung
+      // Ohne Speicher: ~30% Eigenverbrauch
+      // Mit Speicher: +20-40% je nach Größe
+      
+      let baseRate = 0.3; // 30% Grundeigenverbrauch
+      
+      if (batteryCapacity > 0) {
+        // Speicher erhöht Eigenverbrauchsrate
+        const batteryBonus = Math.min(0.4, batteryCapacity / 2000 * 0.3); // Max 40% Bonus
+        baseRate += batteryBonus;
+      }
+      
+      return annualProduction * Math.min(baseRate, 0.8); // Max 80% Eigenverbrauch
+    }
+
+    function generateRecommendation(configurations, bestConfig, annualConsumption) {
+      if (!bestConfig) {
+        return {
+          type: 'warning',
+          title: 'Balkonkraftwerk nicht empfohlen',
+          message: 'Basierend auf Ihren Daten ist ein Balkonkraftwerk aktuell nicht wirtschaftlich.',
+          details: 'Prüfen Sie alternative Standorte oder warten Sie auf bessere Marktbedingungen.'
+        };
+      }
+
+      let recommendationType = 'success';
+      let title = 'Balkonkraftwerk empfohlen!';
+      let message = '';
+      let details = '';
+
+      if (bestConfig.paybackTime <= 6) {
+        recommendationType = 'success';
+        title = '🎉 Sehr empfehlenswert!';
+        message = `Ein ${bestConfig.name} amortisiert sich bereits nach ${bestConfig.paybackTime.toFixed(1)} Jahren.`;
+      } else if (bestConfig.paybackTime <= 10) {
+        recommendationType = 'primary';
+        title = '👍 Empfehlenswert';
+        message = `Ein ${bestConfig.name} amortisiert sich nach ${bestConfig.paybackTime.toFixed(1)} Jahren.`;
+      } else {
+        recommendationType = 'warning';
+        title = '⚠️ Bedingt empfehlenswert';
+        message = `Ein ${bestConfig.name} hat eine Amortisationszeit von ${bestConfig.paybackTime.toFixed(1)} Jahren.`;
+      }
+
+      // Speicher-Empfehlung
+      if (bestConfig.battery) {
+        details += `💾 Der integrierte Speicher erhöht Ihre Eigenverbrauchsrate auf ${bestConfig.selfConsumptionRate.toFixed(0)}%. `;
+      } else {
+        // Prüfe ob Speicher sinnvoll wäre
+        const batteryConfig = Object.values(configurations).find(c => c.battery && c.power === bestConfig.power);
+        if (batteryConfig && batteryConfig.paybackTime < bestConfig.paybackTime + 3) {
+          details += `💡 Ein zusätzlicher Speicher könnte sich lohnen - verkürzt Amortisation um ${(bestConfig.paybackTime - batteryConfig.paybackTime).toFixed(1)} Jahre. `;
+        }
+      }
+
+      details += `📊 Sie decken ${bestConfig.coverageRate.toFixed(0)}% Ihres Jahresverbrauchs ab. `;
+      details += `💰 Jährliche Einsparung: ${bestConfig.totalAnnualSavings.toFixed(0)}€`;
+
+      return {
+        type: recommendationType,
+        title,
+        message,
+        details,
+        config: bestConfig
+      };
+    }
+
+    function displaySolarAnalysis(analysis) {
+      const container = document.getElementById('solarAnalysis');
+      const recommendationContainer = document.getElementById('solarRecommendation');
+      
+      if (!analysis.bestConfig) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 20px;">
+            <ion-icon name="warning" style="font-size: 3rem; color: #ff9800; margin-bottom: 16px;"></ion-icon>
+            <h3>Nicht optimal geeignet</h3>
+            <p>Basierend auf Ihren Daten ist ein Balkonkraftwerk aktuell nicht wirtschaftlich sinnvoll.</p>
+            <small style="color: #666;">
+              Mögliche Gründe: Zu wenig Fläche, ungünstige Ausrichtung oder hohe Verschattung.
+            </small>
+          </div>
+        `;
+        recommendationContainer.classList.add('hidden');
+        return;
+      }
+
+      // Solar Potential Overview
+      container.innerHTML = `
+        <div style="padding: 16px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+            <div style="text-align: center;">
+              <div style="font-size: 1.5rem; font-weight: bold; color: #4CAF50;">
+                ${analysis.solarPotential.annual.toFixed(0)} kWh/kWp
+              </div>
+              <div style="font-size: 0.9rem; color: #666;">Jährliche Sonneneinstrahlung</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 1.5rem; font-weight: bold; color: #2196F3;">
+                ${analysis.userProfile.roofOrientation === 'south' ? '100%' : 
+                  analysis.userProfile.roofOrientation.includes('south') ? '95%' : '85%'}
+              </div>
+              <div style="font-size: 0.9rem; color: #666;">Orientierungseffizienz</div>
+            </div>
+          </div>
+
+          <div class="solar-config">
+            ${Object.entries(analysis.configurations).map(([key, config]) => `
+              <div class="solar-option ${key === Object.keys(analysis.configurations).find(k => analysis.configurations[k] === analysis.bestConfig) ? 'selected' : ''}" onclick="selectSolarConfig('${key}')">
+                <h4>${config.name}</h4>
+                <div class="price">${config.cost}€</div>
+                <div class="specs">
+                  ${config.power}W • ${config.modules} Module<br>
+                  ${config.battery ? config.battery + 'Wh Speicher' : 'Ohne Speicher'}<br>
+                  <strong>${config.paybackTime.toFixed(1)} Jahre Amortisation</strong>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+
+          <table class="comparison-table">
+            <thead>
+              <tr>
+                <th>Konfiguration</th>
+                <th>Erzeugung/Jahr</th>
+                <th>Eigenverbrauch</th>
+                <th>Jährl. Ersparnis</th>
+                <th>ROI (20J)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${Object.entries(analysis.configurations).map(([key, config]) => `
+                <tr class="${key === Object.keys(analysis.configurations).find(k => analysis.configurations[k] === analysis.bestConfig) ? 'highlight' : ''}">
+                  <td><strong>${config.name}</strong></td>
+                  <td>${config.annualProduction.toFixed(0)} kWh</td>
+                  <td>${config.selfConsumptionRate.toFixed(0)}%</td>
+                  <td>${config.totalAnnualSavings.toFixed(0)}€</td>
+                  <td>${config.roi20Years.toFixed(0)}%</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      // Recommendation
+      const rec = analysis.recommendation;
+      recommendationContainer.innerHTML = `
+        <ion-card color="${rec.type}">
+          <ion-card-header>
+            <ion-card-title>${rec.title}</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <p style="margin-bottom: 12px;"><strong>${rec.message}</strong></p>
+            <p style="font-size: 0.9rem; line-height: 1.4;">${rec.details}</p>
+            
+            ${rec.config ? `
+              <div class="savings-highlight" style="margin-top: 16px;">
+                <div class="savings-amount">${rec.config.totalAnnualSavings.toFixed(0)}€/Jahr</div>
+                <div>Geschätzte Ersparnis</div>
+                <div class="payback-time">
+                  <strong>Amortisation: ${rec.config.paybackTime.toFixed(1)} Jahre</strong><br>
+                  20-Jahres-ROI: ${rec.config.roi20Years.toFixed(0)}%
+                </div>
+              </div>
+            ` : ''}
+          </ion-card-content>
+        </ion-card>
+      `;
+      
+      recommendationContainer.classList.remove('hidden');
+      solarAnalysisData = analysis;
+    }
+
+    function selectSolarConfig(configKey) {
+      if (!solarAnalysisData) return;
+      
+      // Update selection visually
+      document.querySelectorAll('.solar-option').forEach(el => el.classList.remove('selected'));
+      event.target.closest('.solar-option').classList.add('selected');
+      
+      // Update recommendation for selected config
+      const selectedConfig = solarAnalysisData.configurations[configKey];
+      const customRecommendation = generateRecommendation(
+        solarAnalysisData.configurations, 
+        selectedConfig, 
+        solarAnalysisData.userProfile.annualConsumption
+      );
+      
+      // Update recommendation display (simplified)
+      const recContainer = document.querySelector('#solarRecommendation ion-card-content');
+      recContainer.innerHTML = `
+        <p style="margin-bottom: 12px;"><strong>${customRecommendation.message}</strong></p>
+        <p style="font-size: 0.9rem; line-height: 1.4;">${customRecommendation.details}</p>
+        
+        <div class="savings-highlight" style="margin-top: 16px;">
+          <div class="savings-amount">${selectedConfig.totalAnnualSavings.toFixed(0)}€/Jahr</div>
+          <div>Geschätzte Ersparnis</div>
+          <div class="payback-time">
+            <strong>Amortisation: ${selectedConfig.paybackTime.toFixed(1)} Jahre</strong><br>
+            20-Jahres-ROI: ${selectedConfig.roi20Years.toFixed(0)}%
+          </div>
+        </div>
+      `;
+    }
+
+    function updateSolarAnalysis() {
+      // Update settings from form
+      const roofOrientation = document.getElementById('roofOrientation').value;
+      const availableArea = document.getElementById('availableArea').value;
+      const shadingLevel = document.getElementById('shadingLevel').value;
+      
+      localStorage.setItem('energyApp_roofOrientation', roofOrientation);
+      localStorage.setItem('energyApp_availableArea', availableArea);
+      localStorage.setItem('energyApp_shadingLevel', shadingLevel);
+      
+      showToast('Balkonkraftwerk-Analyse wird aktualisiert...', 'primary');
+      closeSettings();
+      
+      // Rerun analysis
+      setTimeout(() => {
+        performSolarAnalysis();
+      }, 500);
+    }
+
+    // Settings Management
+    function showSettings() {
+      // Update settings with current data
+      if (userData.name) {
+        document.getElementById('settingsName').textContent = userData.name;
+        document.getElementById('settingsEmail').textContent = userData.email;
+        document.getElementById('settingsAddress').textContent = `${userData.street}, ${userData.city}`;
+        document.getElementById('settingsMeterOperator').textContent = userData.meterOperatorName || 'Nicht angegeben';
+      }
+      
+      const apiToken = localStorage.getItem('energyApp_apiToken');
+      if (apiToken) {
+        document.getElementById('apiToken').value = apiToken;
+      }
+      
+      const electricityPrice = localStorage.getItem('energyApp_electricityPrice') || '0.32';
+      document.getElementById('electricityPrice').value = electricityPrice;
+      
+      const notificationsEnabled = localStorage.getItem('energyApp_notifications') === 'true';
+      document.getElementById('notificationsToggle').checked = notificationsEnabled;
+      
+      // Solar settings
+      const roofOrientation = localStorage.getItem('energyApp_roofOrientation') || 'south';
+      const availableArea = localStorage.getItem('energyApp_availableArea') || '4';
+      const shadingLevel = localStorage.getItem('energyApp_shadingLevel') || 'none';
+      
+      document.getElementById('roofOrientation').value = roofOrientation;
+      document.getElementById('availableArea').value = availableArea;
+      document.getElementById('shadingLevel').value = shadingLevel;
+      
+      document.getElementById('settingsModal').present();
+    }
+
+    function closeSettings() {
+      document.getElementById('settingsModal').dismiss();
+    }
+
+    function saveApiSettings() {
+      const apiToken = document.getElementById('apiToken').value.trim();
+      const electricityPrice = document.getElementById('electricityPrice').value;
+      const notificationsEnabled = document.getElementById('notificationsToggle').checked;
+      
+      localStorage.setItem('energyApp_apiToken', apiToken);
+      localStorage.setItem('energyApp_electricityPrice', electricityPrice);
+      localStorage.setItem('energyApp_notifications', notificationsEnabled.toString());
+      
+      // Show success toast
+      showToast('Einstellungen gespeichert!', 'success');
+      
+      // Reload data with new settings
+      loadEnergyData();
+    }
+
+    function resetApp() {
+      if (confirm('Möchten Sie wirklich alle Daten löschen? Diese Aktion kann nicht rückgängig gemacht werden.')) {
+        localStorage.clear();
+        userData = {};
+        energyData = [];
+        solarAnalysisData = null;
+        closeSettings();
+        showWelcome();
+        showToast('App wurde zurückgesetzt', 'warning');
+      }
+    }
+
+    // Utility Functions
+    function showLoading(show, containerId = 'loadingIndicator') {
+      const indicator = document.getElementById(containerId);
+      if (show) {
+        if (containerId === 'solarAnalysis') {
+          indicator.innerHTML = `
+            <div class="loading-container">
+              <ion-spinner name="circles"></ion-spinner>
+              <p>Analysiere Ihr Solarpotenzial...</p>
+            </div>
+          `;
+        } else {
+          indicator.classList.remove('hidden');
+        }
+      } else {
+        if (containerId === 'solarAnalysis') {
+          // Content will be replaced by analysis results
+        } else {
+          indicator.classList.add('hidden');
+        }
+      }
+    }
+
+    function showToast(message, color = 'primary') {
+      const toast = document.createElement('ion-toast');
+      toast.message = message;
+      toast.duration = 3000;
+      toast.color = color;
+      toast.position = 'bottom';
+      document.body.appendChild(toast);
+      toast.present();
+    }
+
+    function refreshData() {
+      showToast('Aktualisiere Daten...', 'primary');
+      loadEnergyData();
+    }
+
+    // Network Status Management
+    function updateConnectionStatus() {
+      const statusBar = document.getElementById('connectionStatus');
+      
+      if (!navigator.onLine) {
+        statusBar.classList.add('show');
+        statusBar.innerHTML = '<ion-icon name="cloud-offline-outline"></ion-icon> Offline - Cached Daten werden angezeigt';
+      } else {
+        statusBar.classList.remove('show');
+      }
+    }
+
+    // Event Listeners
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+
+    // App Lifecycle Events (for Capacitor)
+    document.addEventListener('deviceready', function() {
+      // This will be called when running as a Capacitor app
+      console.log('Capacitor app ready');
+      
+      // Request permissions for notifications
+      if (window.Capacitor && window.Capacitor.Plugins.LocalNotifications) {
+        window.Capacitor.Plugins.LocalNotifications.requestPermissions();
+      }
+    });
+
+    // Background sync when app becomes active
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && currentScreen === 'dashboard') {
+        loadEnergyData();
+      }
+    });
+
+    // Initialize connection status
+    updateConnectionStatus();
+
+    // Balkonkraftwerk Analyse
+    function performSolarAnalysis() {
+      if (energyData.length === 0) return;
+
+      showLoading(true, 'solarAnalysis');
+      
+      setTimeout(() => {
+        const analysis = calculateSolarPotential();
+        displaySolarAnalysis(analysis);
+        showLoading(false, 'solarAnalysis');
+      }, 2000);
+    }
+
+    function calculateSolarPotential() {
+      // Benutzer-spezifische Daten
+      const roofOrientation = localStorage.getItem('energyApp_roofOrientation') || 'south';
+      const availableArea = parseFloat(localStorage.getItem('energyApp_availableArea') || '4');
+      const shadingLevel = localStorage.getItem('energyApp_shadingLevel') || 'none';
+      const meterOperator = userData.meterOperator || 'eon';
+      
+      // Verbrauchsanalyse
+      const avgDailyConsumption = energyData.reduce((sum, d) => sum + d.consumption, 0) / energyData.length;
+      const annualConsumption = avgDailyConsumption * 365;
+      const hourlyProfile = calculateHourlyConsumptionProfile();
+      
+      // Sonneneinstrahlung basierend auf Standort und Ausrichtung
+      const solarIrradiance = getSolarIrradiance(userData.city, roofOrientation, shadingLevel);
+      
+      // Berechne verschiedene Konfigurationen
+      const configurations = {};
+      
+      Object.keys(solarConfigurations).forEach(key => {
+        const config = solarConfigurations[key];
+        
+        if (config.area <= availableArea) {
+          const annualProduction = config.power * solarIrradiance.annual;
+          const selfConsumption = calculateSelfConsumption(annualProduction, hourlyProfile, config.battery || 0);
+          const feedIn = annualProduction - selfConsumption;
+          
+          const electricityPrice = getElectricityPrice();
+          const feedInTariff = meterOperators[meterOperator]?.feedInTariff || 0.085;
+          
+          const savingsElectricity = selfConsumption * electricityPrice;
+          const feedInRevenue = feedIn * feedInTariff;
+          const totalAnnualSavings = savingsElectricity + feedInRevenue;
+          
+          const paybackTime = config.cost / totalAnnualSavings;
+          const roi20Years = (totalAnnualSavings * 20 - config.cost) / config.cost * 100;
+          
+          configurations[key] = {
+            ...config,
+            annualProduction,
+            selfConsumption,
+            selfConsumptionRate: (selfConsumption / annualProduction) * 100,
+            feedIn,
+            savingsElectricity,
+            feedInRevenue,
+            totalAnnualSavings,
+            paybackTime,
+            roi20Years,
+            coverageRate: (selfConsumption / annualConsumption) * 100
+          };
+        }
+      });
+      
+      // Finde beste Konfiguration
+      const bestConfig = Object.values(configurations).reduce((best, current) => {
+        if (!best) return current;
+        
+        // Priorität: ROI > Payback Time < 10 Jahre > Eigenverbrauchsrate
+        if (current.paybackTime < 10 && current.roi20Years > best.roi20Years) {
+          return current;
+        }
+        return best;
+      }, null);
+      
+      return {
+        userProfile: {
+          annualConsumption,
+          avgDailyConsumption,
+          roofOrientation,
+          availableArea,
+          shadingLevel,
+          meterOperator: meterOperators[meterOperator]?.name || 'Unbekannt'
+        },
+        solarPotential: solarIrradiance,
+        configurations,
+        bestConfig,
+        recommendation: generateRecommendation(configurations, bestConfig, annualConsumption)
+      };
+    }
+
+    function getSolarIrradiance(city, orientation, shading) {
+      // Vereinfachte Berechnung basierend auf Deutschland
+      const baseIrradiance = 1000; // kWh/kWp/Jahr (Deutschland Durchschnitt)
+      
+      // Orientierungsfaktor
+      const orientationFactors = {
+        'south': 1.0,
+        'southeast': 0.95,
+        'southwest': 0.95,
+        'east': 0.85,
+        'west': 0.85,
+        'north': 0.6
+      };
+      
+      // Verschattungsfaktor
+      const shadingFactors = {
+        'none': 1.0,
+        'minimal': 0.95,
+        'moderate': 0.85,
+        'heavy': 0.7
+      };
+      
+      // Regional factor (vereinfacht)
+      let regionalFactor = 1.0;
+      if (city && city.toLowerCase().includes('münchen')) regionalFactor = 1.1;
+      if (city && city.toLowerCase().includes('hamburg')) regionalFactor = 0.9;
+      if (city && city.toLowerCase().includes('köln')) regionalFactor = 0.95;
+      
+      const annual = baseIrradiance * orientationFactors[orientation] * shadingFactors[shading] * regionalFactor;
+      
+      return {
+        annual,
+        monthly: annual / 12,
+        daily: annual / 365,
+        peak: annual / 365 * 1.5 // Sommertag
+      };
+    }
+
+    function calculateHourlyConsumptionProfile() {
+      // Basierend auf deutschen Haushalten
+      const profile = [
+        0.6, 0.5, 0.4, 0.4, 0.5, 0.7, // 0-5 Uhr
+        1.2, 1.8, 2.1, 1.7, 1.4, 1.6, // 6-11 Uhr  
+        1.8, 1.5, 1.3, 1.4, 1.7, 2.3, // 12-17 Uhr
+        2.8, 2.5, 2.1, 1.8, 1.2, 0.8  // 18-23 Uhr
+      ];
+      
+      // Normalisiere auf Gesamtverbrauch
+      const sum = profile.reduce((a, b) => a + b, 0);
+      return profile.map(h => h / sum);
+    }
+
+    function calculateSelfConsumption(annualProduction, hourlyProfile, batteryCapacity = 0) {
+      // Vereinfachte Berechnung
+      // Ohne Speicher: ~30% Eigenverbrauch
+      // Mit Speicher: +20-40% je nach Größe
+      
+      let baseRate = 0.3; // 30% Grundeigenverbrauch
+      
+      if<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Energy Dashboard</title>
+  <base href="/" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="msapplication-tap-highlight" content="no" />
+
+  <!-- Ionic CSS -->
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@ionic/core/dist/ionic/ionic.esm.js"></script>
+  <script nomodule src="https://cdn.jsdelivr.net/npm/@ionic/core/dist/ionic/ionic.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@ionic/core/css/ionic.bundle.css" />
+
+  <!-- Chart.js für Visualisierungen -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+
+  <style>
+    /* App Variables */
+    :root {
+      --ion-color-primary: #667eea;
+      --ion-color-primary-rgb: 102, 126, 234;
+      --ion-color-primary-contrast: #ffffff;
+      --ion-color-primary-contrast-rgb: 255, 255, 255;
+      --ion-color-primary-shade: #5a6fce;
+      --ion-color-primary-tint: #7589ec;
+
+      --ion-color-secondary: #4CAF50;
+      --ion-color-secondary-rgb: 76, 175, 80;
+      --ion-color-secondary-shade: #43a047;
+      --ion-color-secondary-tint: #66bb6a;
+
+      --ion-color-tertiary: #FF9800;
+      --ion-color-tertiary-rgb: 255, 152, 0;
+      --ion-color-tertiary-shade: #f57c00;
+      --ion-color-tertiary-tint: #ffb74d;
+    }
+
+    .welcome-background {
+      background: linear-gradient(135deg, var(--ion-color-primary) 0%, #764ba2 100%);
+      height: 100vh;
+    }
+
+    .welcome-content {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100%;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .welcome-logo {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+    }
+
+    .welcome-title {
+      color: white;
+      font-size: 2rem;
+      font-weight: bold;
+      margin-bottom: 0.5rem;
+    }
+
+    .welcome-subtitle {
+      color: rgba(255,255,255,0.8);
+      font-size: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .metric-card {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      border-left: 4px solid var(--border-color);
+    }
+
+    .metric-value {
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: #333;
+      margin-bottom: 4px;
+    }
+
+    .metric-label {
+      font-size: 0.875rem;
+      color: #666;
+    }
+
+    .chart-container {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 16px 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .chart-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+      text-align: center;
+      color: #333;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .consent-text {
+      background: #f5f5f5;
+      padding: 16px;
+      border-radius: 8px;
+      margin: 16px 0;
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+
+    .error-message {
+      color: var(--ion-color-danger);
+      font-size: 0.875rem;
+      margin-top: 8px;
+    }
+
+    .loading-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 200px;
+    }
+
+    .period-selector {
+      display: flex;
+      background: #f0f0f0;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 16px;
+    }
+
+    .period-button {
+      flex: 1;
+      padding: 8px 16px;
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .period-button.active {
+      background: var(--ion-color-primary);
+      color: white;
+    }
+
+    .refresh-button {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      z-index: 1000;
+    }
+
+    .connection-status {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: var(--ion-color-warning);
+      color: white;
+      text-align: center;
+      padding: 8px;
+      font-size: 0.875rem;
+      z-index: 1001;
+      transform: translateY(-100%);
+      transition: transform 0.3s;
+    }
+
+    .solar-config {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 16px 0;
+    }
+
+    .solar-option {
+      background: #f8f9fa;
+      border: 2px solid #e9ecef;
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .solar-option.selected {
+      border-color: var(--ion-color-primary);
+      background: rgba(102, 126, 234, 0.1);
+    }
+
+    .solar-option h4 {
+      margin: 0 0 8px 0;
+      color: #333;
+    }
+
+    .solar-option .price {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: var(--ion-color-primary);
+      margin-bottom: 8px;
+    }
+
+    .solar-option .specs {
+      font-size: 0.85rem;
+      color: #666;
+      line-height: 1.3;
+    }
+
+    .savings-highlight {
+      background: linear-gradient(135deg, #4CAF50, #8BC34A);
+      color: white;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+      text-align: center;
+    }
+
+    .savings-amount {
+      font-size: 2rem;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+
+    .payback-time {
+      background: rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .comparison-table th,
+    .comparison-table td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #eee;
+    }
+
+    .comparison-table th {
+      background: #f8f9fa;
+      font-weight: 600;
+    }
+
+    .comparison-table .highlight {
+      background: rgba(76, 175, 80, 0.1);
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <ion-app>
+    <!-- Connection Status Bar -->
+    <div id="connectionStatus" class="connection-status">
+      <ion-icon name="cloud-offline-outline"></ion-icon>
+      Offline - Cached Daten werden angezeigt
+    </div>
+
+    <!-- Welcome Screen -->
+    <ion-content id="welcomeScreen" class="welcome-background">
+      <div class="welcome-content">
+        <div class="welcome-logo">⚡</div>
+        <h1 class="welcome-title">Energy Dashboard</h1>
+        <p class="welcome-subtitle">Ihr intelligenter Energieverbrauch-Monitor</p>
+        <ion-button expand="block" color="light" onclick="showOnboarding()">
+          Jetzt starten
+        </ion-button>
+      </div>
+    </ion-content>
+
+    <!-- Onboarding Screen -->
+    <ion-content id="onboardingScreen" class="hidden">
+      <ion-header>
+        <ion-toolbar color="primary">
+          <ion-title>Willkommen</ion-title>
+          <ion-buttons slot="start">
+            <ion-button onclick="showWelcome()">
+              <ion-icon name="arrow-back"></ion-icon>
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+
+      <div style="padding: 20px;">
+        <h2>Persönliche Daten</h2>
+        <p>Bitte geben Sie Ihre Daten ein, um Ihr persönliches Energy Dashboard zu erstellen.</p>
+
+        <ion-item>
+          <ion-label position="stacked">Vollständiger Name *</ion-label>
+          <ion-input id="userName" type="text" placeholder="Max Mustermann" required></ion-input>
+        </ion-item>
+        <div id="nameError" class="error-message hidden">Bitte geben Sie Ihren Namen ein</div>
+
+        <ion-item>
+          <ion-label position="stacked">E-Mail Adresse *</ion-label>
+          <ion-input id="userEmail" type="email" placeholder="max@beispiel.de" required></ion-input>
+        </ion-item>
+        <div id="emailError" class="error-message hidden">Bitte geben Sie eine gültige E-Mail ein</div>
+
+        <ion-item>
+          <ion-label position="stacked">Straße und Hausnummer *</ion-label>
+          <ion-input id="userStreet" type="text" placeholder="Musterstraße 123" required></ion-input>
+        </ion-item>
+
+        <ion-item>
+          <ion-label position="stacked">PLZ und Ort *</ion-label>
+          <ion-input id="userCity" type="text" placeholder="12345 Musterstadt" required></ion-input>
+        </ion-item>
+        <div id="addressError" class="error-message hidden">Bitte geben Sie Ihre vollständige Adresse ein</div>
+
+        <ion-item>
+          <ion-label position="stacked">Messstellenbetreiber *</ion-label>
+          <ion-select id="meterOperator" placeholder="Wählen Sie Ihren Messstellenbetreiber">
+            <ion-select-option value="stadtwerke_muenchen">Stadtwerke München</ion-select-option>
+            <ion-select-option value="eon">E.ON</ion-select-option>
+            <ion-select-option value="rwe">RWE</ion-select-option>
+            <ion-select-option value="vattenfall">Vattenfall</ion-select-option>
+            <ion-select-option value="enBW">EnBW</ion-select-option>
+            <ion-select-option value="rheinenergie">RheinEnergie</ion-select-option>
+            <ion-select-option value="stadtwerke_berlin">Stadtwerke Berlin</ion-select-option>
+            <ion-select-option value="entega">ENTEGA</ion-select-option>
+            <ion-select-option value="lichtblick">LichtBlick</ion-select-option>
+            <ion-select-option value="innogy">innogy</ion-select-option>
+            <ion-select-option value="local_stadtwerke">Lokale Stadtwerke</ion-select-option>
+            <ion-select-option value="other">Sonstiger</ion-select-option>
+          </ion-select>
+        </ion-item>
+        <div id="meterOperatorError" class="error-message hidden">Bitte wählen Sie Ihren Messstellenbetreiber</div>
+
+        <ion-item id="customMeterOperator" class="hidden">
+          <ion-label position="stacked">Messstellenbetreiber Name</ion-label>
+          <ion-input id="customMeterOperatorName" type="text" placeholder="Name Ihres Messstellenbetreibers"></ion-input>
+        </ion-item>
+
+        <h3 style="margin-top: 30px;">Datenschutz & Einverständnis</h3>
+        
+        <div class="consent-text">
+          <strong>Datenabfrage über Inexogy API</strong><br>
+          Diese App ruft Ihre Energieverbrauchsdaten über die Inexogy API ab. 
+          Ihre Daten werden ausschließlich zur Anzeige in diesem Dashboard verwendet 
+          und nicht an Dritte weitergegeben.
+          <br><br>
+          <strong>Abgerufene Daten:</strong>
+          <ul>
+            <li>Stromverbrauchswerte (kWh)</li>
+            <li>Zeitstempel der Messungen</li>
+            <li>Zählerdaten</li>
+          </ul>
+        </div>
+
+        <ion-item>
+          <ion-checkbox id="dataConsent" slot="start"></ion-checkbox>
+          <ion-label>
+            Ich stimme der Datenabfrage über den Inexogy Energieservice zu *
+          </ion-label>
+        </ion-item>
+        <div id="consentError" class="error-message hidden">Bitte bestätigen Sie Ihr Einverständnis</div>
+
+        <ion-item>
+          <ion-checkbox id="privacyConsent" slot="start"></ion-checkbox>
+          <ion-label>
+            Ich habe die Datenschutzerklärung gelesen und akzeptiert *
+          </ion-label>
+        </ion-item>
+
+        <ion-button expand="block" color="primary" onclick="completeOnboarding()" style="margin-top: 30px;">
+          Dashboard erstellen
+        </ion-button>
+      </div>
+    </ion-content>
+
+    <!-- Main Dashboard -->
+    <ion-content id="dashboardScreen" class="hidden">
+      <ion-header>
+        <ion-toolbar color="primary">
+          <ion-title id="dashboardTitle">Energy Dashboard</ion-title>
+          <ion-buttons slot="end">
+            <ion-button onclick="refreshData()" class="refresh-button">
+              <ion-icon name="refresh"></ion-icon>
+            </ion-button>
+            <ion-button onclick="showSettings()">
+              <ion-icon name="settings"></ion-icon>
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+
+      <div style="padding: 16px;">
+        <!-- Period Selector -->
+        <div class="period-selector">
+          <button class="period-button active" onclick="changePeriod('24h', this)">24h</button>
+          <button class="period-button" onclick="changePeriod('7d', this)">7 Tage</button>
+          <button class="period-button" onclick="changePeriod('30d', this)">30 Tage</button>
+          <button class="period-button" onclick="changePeriod('1y', this)">1 Jahr</button>
+        </div>
+
+        <!-- Metrics Grid -->
+        <ion-grid>
+          <ion-row>
+            <ion-col size="6">
+              <div class="metric-card" style="--border-color: #4CAF50;">
+                <div class="metric-value" id="totalConsumption">0 kWh</div>
+                <div class="metric-label">Gesamtverbrauch</div>
+              </div>
+            </ion-col>
+            <ion-col size="6">
+              <div class="metric-card" style="--border-color: #2196F3;">
+                <div class="metric-value" id="avgConsumption">0 kWh</div>
+                <div class="metric-label">Ø pro Tag</div>
+              </div>
+            </ion-col>
+            <ion-col size="6">
+              <div class="metric-card" style="--border-color: #FF9800;">
+                <div class="metric-value" id="totalCost">0 €</div>
+                <div class="metric-label">Gesamtkosten</div>
+              </div>
+            </ion-col>
+            <ion-col size="6">
+              <div class="metric-card" style="--border-color: #F44336;">
+                <div class="metric-value" id="peakConsumption">0 kWh</div>
+                <div class="metric-label">Spitzenverbrauch</div>
+              </div>
+            </ion-col>
+          </ion-row>
+        </ion-grid>
+
+        <!-- Main Chart -->
+        <div class="chart-container">
+          <div class="chart-title">Energieverbrauch über Zeit</div>
+          <canvas id="mainChart" width="400" height="200"></canvas>
+        </div>
+
+        <!-- Hourly Chart -->
+        <div class="chart-container">
+          <div class="chart-title">Verbrauch nach Tageszeit</div>
+          <canvas id="hourlyChart" width="400" height="200"></canvas>
+        </div>
+
+        <!-- Weekly Chart -->
+        <div class="chart-container">
+          <div class="chart-title">Wochenvergleich</div>
+          <canvas id="weeklyChart" width="400" height="200"></canvas>
+        </div>
+
+        <!-- Balkonkraftwerk Analyse -->
+        <div class="chart-container">
+          <div class="chart-title">🌞 Balkonkraftwerk-Potenzial</div>
+          <div id="solarAnalysis">
+            <div class="loading-container">
+              <ion-spinner name="circles"></ion-spinner>
+              <p>Analysiere Ihr Solarpotenzial...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Balkonkraftwerk Empfehlung -->
+        <div id="solarRecommendation" class="chart-container hidden">
+          <div class="chart-title">💡 Empfehlung für Sie</div>
+          <div id="recommendationContent"></div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loadingIndicator" class="loading-container hidden">
+          <ion-spinner name="circles"></ion-spinner>
+          <p>Lade Energiedaten...</p>
+        </div>
+      </div>
+    </ion-content>
+
+    <!-- Settings Modal -->
+    <ion-modal id="settingsModal">
+      <ion-header>
+        <ion-toolbar color="primary">
+          <ion-title>Einstellungen</ion-title>
+          <ion-buttons slot="end">
+            <ion-button onclick="closeSettings()">
+              <ion-icon name="close"></ion-icon>
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content>
+        <div style="padding: 20px;">
+          <h3>Persönliche Daten</h3>
+          <ion-item>
+            <ion-label>Name:</ion-label>
+            <ion-label id="settingsName">-</ion-label>
+          </ion-item>
+          <ion-item>
+            <ion-label>E-Mail:</ion-label>
+            <ion-label id="settingsEmail">-</ion-label>
+          </ion-item>
+          <ion-item>
+            <ion-label>Messstellenbetreiber:</ion-label>
+            <ion-label id="settingsMeterOperator">-</ion-label>
+          </ion-item>
+
+          <h3 style="margin-top: 30px;">API Einstellungen</h3>
+          <ion-item>
+            <ion-label position="stacked">Inexogy API Token</ion-label>
+            <ion-input id="apiToken" type="password" placeholder="Ihr API Token"></ion-input>
+          </ion-item>
+          <ion-button expand="block" color="primary" onclick="saveApiSettings()" style="margin-top: 16px;">
+            API Token speichern
+          </ion-button>
+
+          <h3 style="margin-top: 30px;">Balkonkraftwerk Einstellungen</h3>
+          <ion-item>
+            <ion-label position="stacked">Dachausrichtung</ion-label>
+            <ion-select id="roofOrientation" value="south">
+              <ion-select-option value="south">Süden (optimal)</ion-select-option>
+              <ion-select-option value="southeast">Südost</ion-select-option>
+              <ion-select-option value="southwest">Südwest</ion-select-option>
+              <ion-select-option value="east">Osten</ion-select-option>
+              <ion-select-option value="west">Westen</ion-select-option>
+              <ion-select-option value="north">Norden</ion-select-option>
+            </ion-select>
+          </ion-item>
+          <ion-item>
+            <ion-label position="stacked">Verfügbare Fläche (m²)</ion-label>
+            <ion-input id="availableArea" type="number" value="4" min="1" max="20" step="0.5"></ion-input>
+          </ion-item>
+          <ion-item>
+            <ion-label position="stacked">Verschattung</ion-label>
+            <ion-select id="shadingLevel" value="none">
+              <ion-select-option value="none">Keine Verschattung</ion-select-option>
+              <ion-select-option value="minimal">Minimal (< 2h/Tag)</ion-select-option>
+              <ion-select-option value="moderate">Moderat (2-4h/Tag)</ion-select-option>
+              <ion-select-option value="heavy">Stark (> 4h/Tag)</ion-select-option>
+            </ion-select>
+          </ion-item>
+          <ion-item>
+            <ion-label>Strompreis (€/kWh)</ion-label>
+            <ion-input id="electricityPrice" type="number" value="0.32" step="0.01"></ion-input>
+          </ion-item>
+          <ion-item>
+            <ion-toggle id="notificationsToggle"></ion-toggle>
+            <ion-label>Push Benachrichtigungen</ion-label>
+          </ion-item>
+
+          <h3 style="margin-top: 30px;">App Einstellungen</h3>
+        </div>
+      </ion-content>
+    </ion-modal>
+  </ion-app>
+
+  <script>
+    // App State
+    let currentScreen = 'welcome';
+    let userData = {};
+    let energyData = [];
+    let currentPeriod = '24h';
+    let mainChart, hourlyChart, weeklyChart;
+    let solarAnalysisData = null;
+
+    // Messstellenbetreiber Daten
+    const meterOperators = {
+      'stadtwerke_muenchen': { name: 'Stadtwerke München', feedInTariff: 0.082, region: 'bayern' },
+      'eon': { name: 'E.ON', feedInTariff: 0.085, region: 'deutschland' },
+      'rwe': { name: 'RWE', feedInTariff: 0.083, region: 'nrw' },
+      'vattenfall': { name: 'Vattenfall', feedInTariff: 0.088, region: 'berlin' },
+      'enBW': { name: 'EnBW', feedInTariff: 0.084, region: 'baden_wuerttemberg' },
+      'rheinenergie': { name: 'RheinEnergie', feedInTariff: 0.086, region: 'koeln' },
+      'stadtwerke_berlin': { name: 'Stadtwerke Berlin', feedInTariff: 0.087, region: 'berlin' },
+      'entega': { name: 'ENTEGA', feedInTariff: 0.085, region: 'hessen' },
+      'lichtblick': { name: 'LichtBlick', feedInTariff: 0.089, region: 'deutschland' },
+      'innogy': { name: 'innogy', feedInTariff: 0.084, region: 'nrw' },
+      'local_stadtwerke': { name: 'Lokale Stadtwerke', feedInTariff: 0.085, region: 'lokal' },
+      'other': { name: 'Sonstiger', feedInTariff: 0.085, region: 'deutschland' }
+    };
+
+    // Balkonkraftwerk Konfigurationen
+    const solarConfigurations = {
+      basic_600w: {
+        name: 'Basic 600W',
+        power: 600,
+        cost: 899,
+        modules: 2,
+        area: 4.2,
+        description: '2x 300W Module, Mikrowechselrichter'
+      },
+      standard_800w: {
+        name: 'Standard 800W', 
+        power: 800,
+        cost: 1299,
+        modules: 2,
+        area: 4.2,
+        description: '2x 400W Module, Mikrowechselrichter'
+      },
+      premium_800w_battery: {
+        name: 'Premium 800W + Speicher',
+        power: 800,
+        cost: 2499,
+        modules: 2,
+        area: 4.2,
+        battery: 2400, // Wh
+        description: '2x 400W Module, Mikrowechselrichter, 2.4kWh Speicher'
+      },
+      max_600w_battery: {
+        name: 'Kompakt 600W + Speicher',
+        power: 600,
+        cost: 1899,
+        modules: 2,
+        area: 4.2,
+        battery: 1600, // Wh
+        description: '2x 300W Module, Mikrowechselrichter, 1.6kWh Speicher'
+      }
+    };
+
+    // Check if app is already set up
+    document.addEventListener('DOMContentLoaded', function() {
+      const savedUserData = localStorage.getItem('energyApp_userData');
+      if (savedUserData) {
+        userData = JSON.parse(savedUserData);
+        showDashboard();
+        loadEnergyData();
+      }
+
+      // Messstellenbetreiber Change Listener
+      const meterSelect = document.getElementById('meterOperator');
+      if (meterSelect) {
+        meterSelect.addEventListener('ionChange', function(e) {
+          const customField = document.getElementById('customMeterOperator');
+          if (e.detail.value === 'other') {
+            customField.classList.remove('hidden');
+          } else {
+            customField.classList.add('hidden');
+          }
+        });
+      }
+    });
+
+    // Screen Navigation
+    function showWelcome() {
+      hideAllScreens();
+      document.getElementById('welcomeScreen').classList.remove('hidden');
+      currentScreen = 'welcome';
+    }
+
+    function showOnboarding() {
+      hideAllScreens();
+      document.getElementById('onboardingScreen').classList.remove('hidden');
+      currentScreen = 'onboarding';
+    }
+
+    function showDashboard() {
+      hideAllScreens();
+      document.getElementById('dashboardScreen').classList.remove('hidden');
+      if (userData.name) {
+        document.getElementById('dashboardTitle').textContent = `Hallo, ${userData.name.split(' ')[0]}`;
+      }
+      currentScreen = 'dashboard';
+      initCharts();
+    }
+
+    function hideAllScreens() {
+      document.getElementById('welcomeScreen').classList.add('hidden');
+      document.getElementById('onboardingScreen').classList.add('hidden');
+      document.getElementById('dashboardScreen').classList.add('hidden');
+    }
+
+    // Onboarding Validation & Completion
+    function validateForm() {
+      let isValid = true;
+      
+      // Reset errors
+      document.querySelectorAll('.error-message').forEach(el => el.classList.add('hidden'));
+
+      // Validate name
+      const name = document.getElementById('userName').value.trim();
+      if (!name || name.length < 2) {
+        document.getElementById('nameError').classList.remove('hidden');
+        isValid = false;
+      }
+
+      // Validate email
+      const email = document.getElementById('userEmail').value.trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!email || !emailRegex.test(email)) {
+        document.getElementById('emailError').classList.remove('hidden');
+        isValid = false;
+      }
+
+      // Validate address
+      const street = document.getElementById('userStreet').value.trim();
+      const city = document.getElementById('userCity').value.trim();
+      if (!street || !city) {
+        document.getElementById('addressError').classList.remove('hidden');
+        isValid = false;
+      }
+
+      // Validate meter operator
+      const meterOperator = document.getElementById('meterOperator').value;
+      if (!meterOperator) {
+        document.getElementById('meterOperatorError').classList.remove('hidden');
+        isValid = false;
+      }
+
+      // Validate custom meter operator if "other" selected
+      if (meterOperator === 'other') {
+        const customName = document.getElementById('customMeterOperatorName').value.trim();
+        if (!customName) {
+          document.getElementById('meterOperatorError').textContent = 'Bitte geben Sie den Namen Ihres Messstellenbetreibers ein';
+          document.getElementById('meterOperatorError').classList.remove('hidden');
+          isValid = false;
+        }
+      }
+
+      // Validate consents
+      const dataConsent = document.getElementById('dataConsent').checked;
+      const privacyConsent = document.getElementById('privacyConsent').checked;
+      if (!dataConsent || !privacyConsent) {
+        document.getElementById('consentError').classList.remove('hidden');
+        isValid = false;
+      }
+
+      return isValid;
+    }
+
+    function completeOnboarding() {
+      if (!validateForm()) {
+        return;
+      }
+
+      const meterOperator = document.getElementById('meterOperator').value;
+      let meterOperatorName = meterOperator;
+      
+      if (meterOperator === 'other') {
+        meterOperatorName = document.getElementById('customMeterOperatorName').value.trim();
+      }
+
+      // Save user data
+      userData = {
+        name: document.getElementById('userName').value.trim(),
+        email: document.getElementById('userEmail').value.trim(),
+        street: document.getElementById('userStreet').value.trim(),
+        city: document.getElementById('userCity').value.trim(),
+        meterOperator: meterOperator,
+        meterOperatorName: meterOperatorName,
+        dataConsent: true,
+        privacyConsent: true,
+        setupDate: new Date().toISOString()
+      };
+
+      localStorage.setItem('energyApp_userData', JSON.stringify(userData));
+      
+      showDashboard();
+      loadEnergyData();
+    }
+
+    // Energy Data Management
+    async function loadEnergyData() {
+      showLoading(true);
+      
+      try {
+        // Try to load from Inexogy API first
+        await loadFromAPI();
+      } catch (error) {
+        console.warn('API Error, using demo data:', error);
+        // Fallback to demo data
+        loadDemoData();
+      }
+      
+      showLoading(false);
+      updateDashboard();
+    }
+
+    async function loadFromAPI() {
+      const apiToken = localStorage.getItem('energyApp_apiToken');
+      
+      if (!apiToken) {
+        throw new Error('No API token available');
+      }
+
+      // Note: This is a simplified example. In a real app, you'd need to implement
+      // the full OAuth flow as described in the Inexogy API docs
+      const response = await fetch('https://api.inexogy.com/public/v1/meters', {
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Accept': 'application/json',
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('API request failed');
+      }
+
+      const data = await response.json();
+      energyData = processAPIData(data);
+    }
+
+    function processAPIData(apiData) {
+      // Transform Inexogy API data to our format
+      // This is a simplified transformation - you'd need to adapt based on actual API response
+      return apiData.map(item => ({
+        date: new Date(item.timestamp || Date.now()),
+        consumption: item.value || 0,
+        cost: (item.value || 0) * getElectricityPrice()
+      }));
+    }
+
+    function loadDemoData() {
+      // Generate realistic demo data
+      const data = [];
+      const now = new Date();
+      const days = currentPeriod === '24h' ? 1 : currentPeriod === '7d' ? 7 : currentPeriod === '30d' ? 30 : 365;
+      
+      for (let i = days - 1; i >= 0; i--) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - i);
+        
+        // Realistic consumption pattern
+        const baseConsumption = 15 + Math.sin(i * 0.1) * 3;
+        const randomVariation = Math.random() * 4 - 2;
+        const weekendFactor = (date.getDay() === 0 || date.getDay() === 6) ? 0.8 : 1.0;
+        const consumption = Math.max(0, baseConsumption * weekendFactor + randomVariation);
+        
+        data.push({
+          date: date,
+          consumption: consumption,
+          cost: consumption * getElectricityPrice()
+        });
+      }
+      
+      energyData = data;
+    }
+
+    function getElectricityPrice() {
+      return parseFloat(localStorage.getItem('energyApp_electricityPrice') || '0.32');
+    }
+
+    // Dashboard Updates
+    function updateDashboard() {
+      updateMetrics();
+      updateCharts();
+      performSolarAnalysis();
+    }
+
+    function updateMetrics() {
+      if (energyData.length === 0) return;
+
+      const totalConsumption = energyData.reduce((sum, d) => sum + d.consumption, 0);
+      const avgConsumption = totalConsumption / energyData.length;
+      const totalCost = energyData.reduce((sum, d) => sum + d.cost, 0);
+      const maxConsumption = Math.max(...energyData.map(d => d.consumption));
+
+      document.getElementById('totalConsumption').textContent = `${totalConsumption.toFixed(1)} kWh`;
+      document.getElementById('avgConsumption').textContent = `${avgConsumption.toFixed(1)} kWh`;
+      document.getElementById('totalCost').textContent = `${totalCost.toFixed(2)} €`;
+      document.getElementById('peakConsumption').textContent = `${maxConsumption.toFixed(1)} kWh`;
+    }
+
+    // Chart Management
+    function initCharts() {
+      const ctx1 = document.getElementById('mainChart');
+      const ctx2 = document.getElementById('hourlyChart');
+      const ctx3 = document.getElementById('weeklyChart');
+
+      if (ctx1 && ctx2 && ctx3) {
+        // Destroy existing charts
+        if (mainChart) mainChart.destroy();
+        if (hourlyChart) hourlyChart.destroy();
+        if (weeklyChart) weeklyChart.destroy();
+
+        // Create new charts
+        mainChart = new Chart(ctx1, getMainChartConfig());
+        hourlyChart = new Chart(ctx2, getHourlyChartConfig());
+        weeklyChart = new Chart(ctx3, getWeeklyChartConfig());
+      }
+    }
+
+    function updateCharts() {
+      if (mainChart && energyData.length > 0) {
+        mainChart.data.labels = energyData.map(d => d.date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }));
+        mainChart.data.datasets[0].data = energyData.map(d => d.consumption);
+        mainChart.update();
+      }
+
+      if (hourlyChart) {
+        updateHourlyChart();
+      }
+
+      if (weeklyChart) {
+        updateWeeklyChart();
+      }
+    }
+
+    function getMainChartConfig() {
+      return {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Verbrauch (kWh)',
+            data: [],
+            borderColor: '#4CAF50',
+            backgroundColor: 'rgba(76, 175, 80, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'kWh'
+              }
+            }
+          }
+        }
+      };
+    }
+
+    function getHourlyChartConfig() {
+      const hours = Array.from({length: 24}, (_, i) => `${i}:00`);
+      const hourlyData = generateHourlyData();
+
+      return {
+        type: 'bar',
+        data: {
+          labels: hours,
+          datasets: [{
+            label: 'Verbrauch (kWh)',
+            data: hourlyData,
+            backgroundColor: hours.map((_, i) => 
+              (i >= 6 && i <= 22) ? '#2196F3' : '#9C27B0'
+            )
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'kWh'
+              }
+            }
+          }
+        }
+      };
+    }
+
+    function getWeeklyChartConfig() {
+      const weekdays = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+      const weeklyData = calculateWeeklyAverages();
+
+      return {
+        type: 'bar',
+        data: {
+          labels: weekdays,
+          datasets: [{
+            label: 'Ø Verbrauch (kWh)',
+            data: weeklyData,
+            backgroundColor: weekdays.map((_, i) => 
+              (i === 0 || i === 6) ? '#FF9800' : '#4CAF50'
+            )
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'kWh'
+              }
+            }
+          }
+        }
+      };
+    }
+
+    function generateHourlyData() {
+      const hourlyData = [];
+      for (let hour = 0; hour < 24; hour++) {
+        let consumption;
+        if (hour >= 6 && hour <= 22) {
+          consumption = 12 + Math.sin((hour - 6) * Math.PI / 16) * 8 + 
+                       (hour === 8 || hour === 12 || hour === 19 ? 5 : 0) + 
+                       Math.random() * 2;
+        } else {
+          consumption = 5 + Math.random() * 3;
+        }
+        hourlyData.push(Math.max(0, consumption));
+      }
+      return hourlyData;
+    }
+
+    function calculateWeeklyAverages() {
+      const weeklyAverages = new Array(7).fill(0);
+      const counts = new Array(7).fill(0);
+
+      energyData.forEach(d => {
+        const dayOfWeek = d.date.getDay();
+        weeklyAverages[dayOfWeek] += d.consumption;
+        counts[dayOfWeek]++;
+      });
+
+      return weeklyAverages.map((sum, i) => counts[i] > 0 ? sum / counts[i] : 0);
+    }
+
+    function updateHourlyChart() {
+      if (hourlyChart) {
+        hourlyChart.data.datasets[0].data = generateHourlyData();
+        hourlyChart.update();
+      }
+    }
+
+    function updateWeeklyChart() {
+      if (weeklyChart) {
+        weeklyChart.data.datasets[0].data = calculateWeeklyAverages();
+        weeklyChart.update();
+      }
+    }
+
+    // Period Management
+    function changePeriod(period, button) {
+      currentPeriod = period;
+      
+      // Update button states
+      document.querySelectorAll('.period-button').forEach(btn => btn.classList.remove('active'));
+      button.classList.add('active');
+      
+      // Reload data for new period
+      loadEnergyData();
+    }
+
+    // Settings Management
+    function showSettings() {
+      // Update settings with current data
+      if (userData.name) {
+        document.getElementById('settingsName').textContent = userData.name;
+        document.getElementById('settingsEmail').textContent = userData.email;
+        document.getElementById('settingsAddress').textContent = `${userData.street}, ${userData.city}`;
+      }
+      
+      const apiToken = localStorage.getItem('energyApp_apiToken');
+      if (apiToken) {
+        document.getElementById('apiToken').value = apiToken;
+      }
+      
+      const electricityPrice = localStorage.getItem('energyApp_electricityPrice') || '0.32';
+      document.getElementById('electricityPrice').value = electricityPrice;
+      
+      const notificationsEnabled = localStorage.getItem('energyApp_notifications') === 'true';
+      document.getElementById('notificationsToggle').checked = notificationsEnabled;
+      
+      document.getElementById('settingsModal').present();
+    }
+
+    function closeSettings() {
+      document.getElementById('settingsModal').dismiss();
+    }
+
+    function saveApiSettings() {
+      const apiToken = document.getElementById('apiToken').value.trim();
+      const electricityPrice = document.getElementById('electricityPrice').value;
+      const notificationsEnabled = document.getElementById('notificationsToggle').checked;
+      
+      localStorage.setItem('energyApp_apiToken', apiToken);
+      localStorage.setItem('energyApp_electricityPrice', electricityPrice);
+      localStorage.setItem('energyApp_notifications', notificationsEnabled.toString());
+      
+      // Show success toast
+      showToast('Einstellungen gespeichert!', 'success');
+      
+      // Reload data with new settings
+      loadEnergyData();
+    }
+
+    function resetApp() {
+      if (confirm('Möchten Sie wirklich alle Daten löschen? Diese Aktion kann nicht rückgängig gemacht werden.')) {
+        localStorage.clear();
+        userData = {};
+        energyData = [];
+        closeSettings();
+        showWelcome();
+        showToast('App wurde zurückgesetzt', 'warning');
+      }
+    }
+
+    // Utility Functions
+    function showLoading(show) {
+      const indicator = document.getElementById('loadingIndicator');
+      if (show) {
+        indicator.classList.remove('hidden');
+      } else {
+        indicator.classList.add('hidden');
+      }
+    }
+
+    function showToast(message, color = 'primary') {
+      const toast = document.createElement('ion-toast');
+      toast.message = message;
+      toast.duration = 3000;
+      toast.color = color;
+      toast.position = 'bottom';
+      document.body.appendChild(toast);
+      toast.present();
+    }
+
+    function refreshData() {
+      showToast('Aktualisiere Daten...', 'primary');
+      loadEnergyData();
+    }
+
+    // Network Status Management
+    function updateConnectionStatus() {
+      const statusBar = document.getElementById('connectionStatus');
+      
+      if (!navigator.onLine) {
+        statusBar.classList.add('show');
+        statusBar.innerHTML = '<ion-icon name="cloud-offline-outline"></ion-icon> Offline - Cached Daten werden angezeigt';
+      } else {
+        statusBar.classList.remove('show');
+      }
+    }
+
+    // Event Listeners
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+
+    // App Lifecycle Events (for Capacitor)
+    document.addEventListener('deviceready', function() {
+      // This will be called when running as a Capacitor app
+      console.log('Capacitor app ready');
+      
+      // Request permissions for notifications
+      if (window.Capacitor && window.Capacitor.Plugins.LocalNotifications) {
+        window.Capacitor.Plugins.LocalNotifications.requestPermissions();
+      }
+    });
+
+    // Background sync when app becomes active
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && currentScreen === 'dashboard') {
+        loadEnergyData();
+      }
+    });
+
+    // Initialize connection status
+    updateConnectionStatus();
+
+    // Demo API Integration Functions
+    class InexogyAPIClient {
+      constructor() {
+        this.baseURL = 'https://api.inexogy.com/public/v1';
+        this.consumerToken = null;
+        this.accessToken = null;
+      }
+
+      async authenticate(email, password) {
+        try {
+          // Step 1: Register client (in production, this would be done once)
+          const consumerResponse = await this.registerClient();
+          
+          // Step 2: Get request token
+          const requestToken = await this.getRequestToken();
+          
+          // Step 3: Authorize with user credentials
+          const verifier = await this.authorizeToken(requestToken, email, password);
+          
+          // Step 4: Get access token
+          this.accessToken = await this.getAccessToken(requestToken, verifier);
+          
+          localStorage.setItem('energyApp_accessToken', JSON.stringify(this.accessToken));
+          return true;
+        } catch (error) {
+          console.error('Authentication failed:', error);
+          throw error;
+        }
+      }
+
+      async registerClient() {
+        const response = await fetch(`${this.baseURL}/oauth1/consumer_token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: 'client=EnergyDashboardApp'
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to register client');
+        }
+
+        this.consumerToken = await response.json();
+        return this.consumerToken;
+      }
+
+      async getRequestToken() {
+        // Implementation of OAuth 1.0 request token flow
+        // This is simplified - in production you'd use a proper OAuth library
+        const oauthParams = this.generateOAuthParams();
+        
+        const response = await fetch(`${this.baseURL}/oauth1/request_token`, {
+          method: 'POST',
+          headers: {
+            'Authorization': this.buildAuthHeader(oauthParams),
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to get request token');
+        }
+
+        return this.parseTokenResponse(await response.text());
+      }
+
+      async authorizeToken(requestToken, email, password) {
+        const response = await fetch(
+          `${this.baseURL}/oauth1/authorize?oauth_token=${requestToken.token}&email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`
+        );
+
+        if (!response.ok) {
+          throw new Error('Authorization failed');
+        }
+
+        const responseText = await response.text();
+        const params = new URLSearchParams(responseText);
+        return params.get('oauth_verifier');
+      }
+
+      async getAccessToken(requestToken, verifier) {
+        const oauthParams = this.generateOAuthParams({
+          oauth_token: requestToken.token,
+          oauth_verifier: verifier
+        });
+
+        const response = await fetch(`${this.baseURL}/oauth1/access_token`, {
+          method: 'POST',
+          headers: {
+            'Authorization': this.buildAuthHeader(oauthParams),
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to get access token');
+        }
+
+        return this.parseTokenResponse(await response.text());
+      }
+
+      async getMeters() {
+        if (!this.accessToken) {
+          const savedToken = localStorage.getItem('energyApp_accessToken');
+          if (savedToken) {
+            this.accessToken = JSON.parse(savedToken);
+          } else {
+            throw new Error('No access token available');
+          }
+        }
+
+        const oauthParams = this.generateOAuthParams({
+          oauth_token: this.accessToken.token
+        });
+
+        const response = await fetch(`${this.baseURL}/meters`, {
+          headers: {
+            'Authorization': this.buildAuthHeader(oauthParams),
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch meters');
+        }
+
+        return await response.json();
+      }
+
+      async getMeasurements(meterId, startDate, endDate) {
+        const oauthParams = this.generateOAuthParams({
+          oauth_token: this.accessToken.token
+        });
+
+        const url = `${this.baseURL}/meters/${meterId}/measurements?start=${startDate.toISOString()}&end=${endDate.toISOString()}`;
+
+        const response = await fetch(url, {
+          headers: {
+            'Authorization': this.buildAuthHeader(oauthParams),
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch measurements');
+        }
+
+        return await response.json();
+      }
+
+      generateOAuthParams(additionalParams = {}) {
+        return {
+          oauth_consumer_key: this.consumerToken?.key || '',
+          oauth_signature_method: 'HMAC-SHA1',
+          oauth_timestamp: Math.floor(Date.now() / 1000).toString(),
+          oauth_nonce: this.generateNonce(),
+          oauth_version: '1.0',
+          ...additionalParams
+        };
+      }
+
+      generateNonce() {
+        return Math.random().toString(36).substring(2, 15) + 
+               Math.random().toString(36).substring(2, 15);
+      }
+
+      buildAuthHeader(params) {
+        const signature = this.generateSignature(params);
+        params.oauth_signature = signature;
+
+        const authParams = Object.keys(params)
+          .map(key => `${key}="${encodeURIComponent(params[key])}"`)
+          .join(', ');
+
+        return `OAuth ${authParams}`;
+      }
+
+      generateSignature(params) {
+        // Simplified signature generation - in production use crypto library
+        // This is just for demonstration
+        return 'dummy_signature';
+      }
+
+      parseTokenResponse(responseText) {
+        const params = new URLSearchParams(responseText);
+        return {
+          token: params.get('oauth_token'),
+          secret: params.get('oauth_token_secret')
+        };
+      }
+    }
+
+    // Enhanced API Integration
+    const apiClient = new InexogyAPIClient();
+
+    async function authenticateWithInexogy() {
+      const modal = document.createElement('ion-modal');
+      modal.innerHTML = `
+        <ion-header>
+          <ion-toolbar color="primary">
+            <ion-title>Inexogy Anmeldung</ion-title>
+            <ion-buttons slot="end">
+              <ion-button onclick="this.closest('ion-modal').dismiss()">
+                <ion-icon name="close"></ion-icon>
+              </ion-button>
+            </ion-buttons>
+          </ion-toolbar>
+        </ion-header>
+        <ion-content>
+          <div style="padding: 20px;">
+            <p>Bitte geben Sie Ihre Inexogy-Zugangsdaten ein:</p>
+            
+            <ion-item>
+              <ion-label position="stacked">E-Mail</ion-label>
+              <ion-input id="inexogyEmail" type="email" placeholder="Ihre Inexogy E-Mail"></ion-input>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">Passwort</ion-label>
+              <ion-input id="inexogyPassword" type="password" placeholder="Ihr Inexogy Passwort"></ion-input>
+            </ion-item>
+            
+            <ion-button expand="block" color="primary" onclick="performAuthentication()" style="margin-top: 20px;">
+              Anmelden
+            </ion-button>
+            
+            <div id="authError" class="error-message hidden">Anmeldung fehlgeschlagen. Bitte überprüfen Sie Ihre Eingaben.</div>
+          </div>
+        </ion-content>
+      `;
+
+      document.body.appendChild(modal);
+      await modal.present();
+
+      window.performAuthentication = async function() {
+        const email = document.getElementById('inexogyEmail').value;
+        const password = document.getElementById('inexogyPassword').value;
+
+        if (!email || !password) {
+          document.getElementById('authError').textContent = 'Bitte füllen Sie alle Felder aus.';
+          document.getElementById('authError').classList.remove('hidden');
+          return;
+        }
+
+        try {
+          showToast('Authentifizierung läuft...', 'primary');
+          await apiClient.authenticate(email, password);
+          modal.dismiss();
+          showToast('Erfolgreich angemeldet!', 'success');
+          loadEnergyData();
+        } catch (error) {
+          document.getElementById('authError').textContent = 'Anmeldung fehlgeschlagen. Bitte überprüfen Sie Ihre Eingaben.';
+          document.getElementById('authError').classList.remove('hidden');
+        }
+      };
+    }
+
+    async function loadFromInexogyAPI() {
+      try {
+        // Get available meters
+        const meters = await apiClient.getMeters();
+        
+        if (!meters || meters.length === 0) {
+          throw new Error('No meters found');
+        }
+
+        // Use first meter for demo
+        const meterId = meters[0].id;
+        
+        // Calculate date range based on current period
+        const endDate = new Date();
+        const startDate = new Date();
+        
+        switch (currentPeriod) {
+          case '24h':
+            startDate.setDate(startDate.getDate() - 1);
+            break;
+          case '7d':
+            startDate.setDate(startDate.getDate() - 7);
+            break;
+          case '30d':
+            startDate.setDate(startDate.getDate() - 30);
+            break;
+          case '1y':
+            startDate.setFullYear(startDate.getFullYear() - 1);
+            break;
+        }
+
+        // Get measurements
+        const measurements = await apiClient.getMeasurements(meterId, startDate, endDate);
+        
+        // Transform data
+        energyData = measurements.map(measurement => ({
+          date: new Date(measurement.timestamp),
+          consumption: measurement.value,
+          cost: measurement.value * getElectricityPrice()
+        }));
+
+        // Cache data for offline use
+        localStorage.setItem('energyApp_cachedData', JSON.stringify({
+          data: energyData,
+          timestamp: Date.now(),
+          period: currentPeriod
+        }));
+
+      } catch (error) {
+        console.error('Error loading from Inexogy API:', error);
+        
+        // Try to load cached data
+        const cachedData = localStorage.getItem('energyApp_cachedData');
+        if (cachedData) {
+          const parsed = JSON.parse(cachedData);
+          if (parsed.period === currentPeriod && Date.now() - parsed.timestamp < 3600000) { // 1 hour cache
+            energyData = parsed.data.map(d => ({
+              ...d,
+              date: new Date(d.date)
+            }));
+            showToast('Cached Daten geladen', 'warning');
+            return;
+          }
+        }
+        
+        // Fallback to demo data
+        loadDemoData();
+        showToast('Demo-Daten geladen (API nicht verfügbar)', 'warning');
+      }
+    }
+
+    // Enhanced refresh function
+    async function refreshData() {
+      showLoading(true);
+      
+      try {
+        await loadFromInexogyAPI();
+        showToast('Daten aktualisiert', 'success');
+      } catch (error) {
+        showToast('Fehler beim Laden der Daten', 'danger');
+      }
+      
+      showLoading(false);
+      updateDashboard();
+    }
+
+    // Add authentication button to settings
+    function addAuthenticationToSettings() {
+      const settingsContent = document.querySelector('#settingsModal ion-content div');
+      const authSection = document.createElement('div');
+      authSection.innerHTML = `
+        <h3 style="margin-top: 30px;">Inexogy Verbindung</h3>
+        <ion-button expand="block" color="secondary" onclick="authenticateWithInexogy()">
+          Mit Inexogy verbinden
+        </ion-button>
+        <p style="font-size: 0.8rem; color: #666; margin-top: 8px;">
+          Verbinden Sie sich mit Ihrem Inexogy-Account, um echte Energiedaten abzurufen.
+        </p>
+      `;
+      
+      // Insert before API settings
+      const apiSettings = settingsContent.querySelector('h3');
+      settingsContent.insertBefore(authSection, apiSettings);
+    }
+
+    // Initialize authentication section when DOM is ready
+    document.addEventListener('DOMContentLoaded', function() {
+      setTimeout(addAuthenticationToSettings, 1000);
+    });
+
+    // Energy insights and recommendations
+    function generateEnergyInsights() {
+      if (energyData.length === 0) return [];
+
+      const insights = [];
+      const avgConsumption = energyData.reduce((sum, d) => sum + d.consumption, 0) / energyData.length;
+      const maxConsumption = Math.max(...energyData.map(d => d.consumption));
+      const weeklyData = calculateWeeklyAverages();
+      
+      // Peak consumption insight
+      if (maxConsumption > avgConsumption * 1.5) {
+        insights.push({
+          type: 'warning',
+          title: 'Hoher Spitzenverbrauch',
+          message: `Ihr Spitzenverbrauch von ${maxConsumption.toFixed(1)} kWh liegt ${((maxConsumption / avgConsumption - 1) * 100).toFixed(0)}% über dem Durchschnitt.`,
+          recommendation: 'Prüfen Sie energieintensive Geräte und vermeiden Sie deren gleichzeitige Nutzung.'
+        });
+      }
+
+      // Weekend vs weekday consumption
+      const weekendAvg = (weeklyData[0] + weeklyData[6]) / 2;
+      const weekdayAvg = weeklyData.slice(1, 6).reduce((sum, val) => sum + val, 0) / 5;
+      
+      if (weekendAvg > weekdayAvg * 1.2) {
+        insights.push({
+          type: 'info',
+          title: 'Höherer Wochenendverbrauch',
+          message: `Am Wochenende verbrauchen Sie ${((weekendAvg / weekdayAvg - 1) * 100).toFixed(0)}% mehr Energie.`,
+          recommendation: 'Nutzen Sie energieeffiziente Modi bei Haushaltsgeräten oder planen Sie energieintensive Aktivitäten.'
+        });
+      }
+
+      // Cost optimization
+      const monthlyCost = avgConsumption * 30 * getElectricityPrice();
+      if (monthlyCost > 100) {
+        insights.push({
+          type: 'success',
+          title: 'Sparpotential',
+          message: `Bei einem geschätzten Monatsverbrauch von ${monthlyCost.toFixed(2)} € könnten Sie durch 10% Einsparung ${(monthlyCost * 0.1).toFixed(2)} € pro Monat sparen.`,
+          recommendation: 'LED-Beleuchtung, effiziente Geräte und bewusster Umgang können helfen.'
+        });
+      }
+
+      return insights;
+    }
+
+    // Add insights to dashboard
+    function displayInsights() {
+      const insights = generateEnergyInsights();
+      const dashboardContent = document.querySelector('#dashboardScreen > div');
+      
+      // Remove existing insights
+      const existingInsights = document.getElementById('energyInsights');
+      if (existingInsights) {
+        existingInsights.remove();
+      }
+
+      if (insights.length > 0) {
+        const insightsContainer = document.createElement('div');
+        insightsContainer.id = 'energyInsights';
+        insightsContainer.innerHTML = `
+          <div style="margin: 16px 8px;">
+            <h3 style="margin-bottom: 16px; color: #333;">💡 Energie-Insights</h3>
+            ${insights.map(insight => `
+              <ion-card color="${insight.type}">
+                <ion-card-header>
+                  <ion-card-title style="font-size: 1rem;">${insight.title}</ion-card-title>
+                </ion-card-header>
+                <ion-card-content>
+                  <p style="margin-bottom: 8px;">${insight.message}</p>
+                  <small style="font-style: italic;">${insight.recommendation}</small>
+                </ion-card-content>
+              </ion-card>
+            `).join('')}
+          </div>
+        `;
+
+        // Insert after charts
+        const lastChart = document.querySelector('.chart-container:last-of-type');
+        lastChart.parentNode.insertBefore(insightsContainer, lastChart.nextSibling);
+      }
+    }
+
+    // Enhanced updateDashboard function
+    const originalUpdateDashboard = updateDashboard;
+    updateDashboard = function() {
+      originalUpdateDashboard();
+      displayInsights();
+    };
+  </script>
+
+      
